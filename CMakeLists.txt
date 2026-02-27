@@ -13,6 +13,8 @@ option(EKA2L1_BUILD_VULKAN_BACKEND "Build Vulkan backend" OFF)
 option(EKA2L1_DEPLOY_DMG "Deploy EKA2L1 as .dmg" OFF)
 option(EKA2L1_BUILD_PATCH "Enable building Symbian's DLL patches using Symbian SDK" OFF)
 option(EKA2L1_ENABLE_DISCORD_RICH_PRESENCE "Enable support for Discord Rich Presence" OFF)
+option(EKA2L1_BUILD_SDL2_FRONTEND "Build the SDL2-based CLI frontend (no Qt dependency)" OFF)
+option(EKA2L1_NO_QT_FRONTEND "Skip building the Qt frontend" OFF)
 
 set (CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 set (ROOT ${CMAKE_CURRENT_SOURCE_DIR})
