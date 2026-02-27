@@ -28,7 +28,9 @@
 #include "backend/context_egl_android.h"
 #elif EKA2L1_PLATFORM(UNIX)
 #include "backend/context_wayland.h"
+#if !EKA2L1_ARCH(ARM64)
 #include "backend/context_glx.h"
+#endif
 #endif
 
 namespace eka2l1::drivers::graphics {
@@ -43,11 +45,15 @@ namespace eka2l1::drivers::graphics {
 #elif EKA2L1_PLATFORM(ANDROID)
         return std::make_unique<gl_context_egl_android>(system_info, stereo, core);
 #elif EKA2L1_PLATFORM(UNIX)
+#if EKA2L1_ARCH(ARM64)
+        return std::make_unique<gl_context_egl_wayland>(system_info, stereo, core);
+#else
         if (system_info.type == window_system_type::wayland) {
             return std::make_unique<gl_context_egl_wayland>(system_info, stereo, core);
         } else {
             return std::make_unique<gl_context_glx>(system_info, stereo, core);
         }
+#endif
 #else
         return nullptr;
 #endif

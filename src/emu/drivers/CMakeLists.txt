@@ -136,22 +136,28 @@ elseif(ANDROID)
         src/graphics/backend/context_egl_android.h
     )
 else()
-    find_package(X11 REQUIRED)
-    find_package(OpenGL REQUIRED)
     find_package(Wayland REQUIRED EGL)
 
     target_sources(drivers PRIVATE
-        src/graphics/backend/context_glx.cpp
-        src/graphics/backend/context_glx.h
         src/graphics/backend/context_egl.cpp
         src/graphics/backend/context_egl.h
         src/graphics/backend/context_wayland.cpp
         src/graphics/backend/context_wayland.h
     )
 
-    # GLX has a hard dependency on libGL.
-    # Make sure to link to it if using GLX.
-    target_link_libraries(drivers PUBLIC ${OPENGL_LIBRARIES} ${X11_LIBRARIES} ${WAYLAND_LIBRARIES} EGL)
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        target_link_libraries(drivers PUBLIC ${WAYLAND_LIBRARIES} EGL GLESv2)
+    else()
+        find_package(X11 REQUIRED)
+        find_package(OpenGL REQUIRED)
+
+        target_sources(drivers PRIVATE
+            src/graphics/backend/context_glx.cpp
+            src/graphics/backend/context_glx.h
+        )
+
+        target_link_libraries(drivers PUBLIC ${OPENGL_LIBRARIES} ${X11_LIBRARIES} ${WAYLAND_LIBRARIES} EGL)
+    endif()
 endif()
 
 # Make miniBAE build alone so that its include directories don't messed up system headers

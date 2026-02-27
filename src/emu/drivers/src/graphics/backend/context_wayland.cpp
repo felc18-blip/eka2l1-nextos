@@ -3,13 +3,18 @@
 
 #include "context_wayland.h"
 #include <common/log.h>
+#include <common/platform.h>
 #include <dlfcn.h>
 
 namespace eka2l1::drivers::graphics {
     static const char* WAYLAND_EGL_MODNAME = "libwayland-egl.so.1";
 
     gl_context_egl_wayland::gl_context_egl_wayland(const window_system_info& wsi, bool stereo, bool core)
+#if EKA2L1_ARCH(ARM64)
+        : gl_context_egl(wsi, stereo, core, true) {
+#else
         : gl_context_egl(wsi, stereo, core, false) {
+#endif
 
     }
 

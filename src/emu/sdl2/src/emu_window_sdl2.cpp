@@ -139,9 +139,8 @@ namespace eka2l1::sdl {
     }
 
     void emu_window_sdl2::swap_buffer() {
-        if (sdl_window_) {
-            SDL_GL_SwapWindow(sdl_window_);
-        }
+        // The gl_context (EGL/GLX) handles the actual buffer swap via
+        // eglSwapBuffers/glXSwapBuffers. Nothing to do here.
     }
 
     vec2 emu_window_sdl2::window_size() {
