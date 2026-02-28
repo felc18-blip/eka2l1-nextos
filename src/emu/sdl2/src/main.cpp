@@ -104,6 +104,7 @@ namespace eka2l1::sdl {
         std::size_t sys_reset_cbh = 0;
 
         int present_status = 0;
+        std::atomic<int> host_rotation{0};
 
         void stage_one();
         bool stage_two();
@@ -293,6 +294,8 @@ namespace eka2l1::sdl {
     static void draw_screen_impl(emulator_state *state, epoc::screen *scr, const bool is_dsa) {
         state->graphics_driver->wait_for(&state->present_status);
 
+        const int total_rotation = (scr->ui_rotation + state->host_rotation.load()) % 360;
+
         drivers::graphics_command_builder builder;
 
         const auto window_width = state->window->window_fb_size().x;
@@ -316,7 +319,7 @@ namespace eka2l1::sdl {
 
         auto &crr_mode = scr->current_mode();
         eka2l1::vec2 size = crr_mode.size;
-        if ((scr->ui_rotation % 180) != 0) {
+        if ((total_rotation % 180) != 0) {
             std::swap(size.x, size.y);
         }
 
@@ -346,8 +349,8 @@ namespace eka2l1::sdl {
         src.size = crr_mode.size;
         src.size *= scr->display_scale_factor;
 
-        drivers::advance_draw_pos_around_origin(dest, scr->ui_rotation);
-        if (scr->ui_rotation % 180 != 0) {
+        drivers::advance_draw_pos_around_origin(dest, total_rotation);
+        if (total_rotation % 180 != 0) {
             std::swap(dest.size.x, dest.size.y);
         }
 
@@ -355,7 +358,7 @@ namespace eka2l1::sdl {
         builder.set_texture_filter(scr->screen_texture, false, drivers::filter_option::linear);
 
         builder.draw_bitmap(scr->screen_texture, 0, dest, src, eka2l1::vec2(0, 0),
-            static_cast<float>(scr->ui_rotation), 0);
+            static_cast<float>(total_rotation), 0);
 
         builder.load_backup_state();
 
@@ -414,8 +417,44 @@ namespace eka2l1::sdl {
             emu->winserv->queue_input_from_driver(evt);
     }
 
+    static std::uint32_t remap_arrow_for_rotation(std::uint32_t key, int rotation) {
+        if (rotation == 0)
+            return key;
+
+        // Map: physical key → game direction after clockwise rotation
+        //  90°: Right→Up, Left→Down, Up→Left, Down→Right
+        // 180°: Up→Down, Down→Up, Left→Right, Right→Left
+        // 270°: Right→Down, Left→Up, Up→Right, Down→Left
+        static const std::uint32_t table[3][4] = {
+            // 90°:  Up→Left,    Down→Right,  Left→Down,   Right→Up
+            { SDLK_LEFT, SDLK_RIGHT, SDLK_DOWN, SDLK_UP },
+            // 180°: Up→Down,    Down→Up,     Left→Right,  Right→Left
+            { SDLK_DOWN, SDLK_UP, SDLK_RIGHT, SDLK_LEFT },
+            // 270°: Up→Right,   Down→Left,   Left→Up,     Right→Down
+            { SDLK_RIGHT, SDLK_LEFT, SDLK_UP, SDLK_DOWN },
+        };
+
+        int idx = -1;
+        switch (key) {
+        case SDLK_UP:    idx = 0; break;
+        case SDLK_DOWN:  idx = 1; break;
+        case SDLK_LEFT:  idx = 2; break;
+        case SDLK_RIGHT: idx = 3; break;
+        default: return key;
+        }
+
+        return table[(rotation / 90) - 1][idx];
+    }
+
     void on_key_press(void *userdata, std::uint32_t key) {
         auto *emu = reinterpret_cast<emulator_state *>(userdata);
+
+        if (key == SDLK_r) {
+            emu->host_rotation.store((emu->host_rotation.load() + 90) % 360);
+            return;
+        }
+
+        key = remap_arrow_for_rotation(key, emu->host_rotation.load());
         auto evt = make_key_event_driver(static_cast<int>(key), drivers::key_state::pressed);
 
         const std::lock_guard<std::mutex> guard(emu->lockdown);
@@ -425,6 +464,7 @@ namespace eka2l1::sdl {
 
     void on_key_release(void *userdata, std::uint32_t key) {
         auto *emu = reinterpret_cast<emulator_state *>(userdata);
+        key = remap_arrow_for_rotation(key, emu->host_rotation.load());
         auto evt = make_key_event_driver(static_cast<int>(key), drivers::key_state::released);
 
         const std::lock_guard<std::mutex> guard(emu->lockdown);
