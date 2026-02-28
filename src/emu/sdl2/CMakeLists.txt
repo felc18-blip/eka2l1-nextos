@@ -22,10 +22,12 @@ target_link_libraries(eka2l1_sdl2 PRIVATE
     epocservs
     epockern
     epocpkg
+    epocloader
     gdbstub
     uvw
     j2me
     stb
+    lunasvg
     yaml-cpp
     SDL2
     ${SDL2_TTF_LIBRARY}

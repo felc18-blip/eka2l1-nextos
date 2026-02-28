@@ -22,6 +22,7 @@
 
 #include <common/algorithm.h>
 #include <common/arghandler.h>
+#include <common/buffer.h>
 #include <common/cvt.h>
 #include <common/fileutils.h>
 #include <common/log.h>
@@ -42,8 +43,15 @@
 #include <kernel/kernel.h>
 #include <kernel/libmanager.h>
 
+#include <loader/mbm.h>
+#include <loader/mif.h>
+#include <loader/svgb.h>
+#include <loader/nvg.h>
+#include <lunasvg.h>
 #include <package/manager.h>
 #include <services/applist/applist.h>
+#include <services/fbs/fbs.h>
+#include <services/fbs/bitmap.h>
 #include <services/init.h>
 #include <services/window/screen.h>
 #include <services/window/window.h>
@@ -779,53 +787,243 @@ namespace eka2l1::sdl {
 
         for (int i = 0; font_paths[i]; i++) {
             TTF_Font *font = TTF_OpenFont(font_paths[i], size);
-            if (font) {
-                LOG_INFO(FRONTEND_CMDLINE, "Loaded font: {}", font_paths[i]);
+            if (font)
                 return font;
-            }
         }
         return nullptr;
     }
 
-    struct launcher_text_cache {
-        SDL_Texture *texture = nullptr;
-        int w = 0;
-        int h = 0;
-    };
-
-    static launcher_text_cache render_text_cached(SDL_Renderer *renderer, TTF_Font *font,
-            const std::string &text, SDL_Color color) {
-        launcher_text_cache result;
-        if (text.empty()) return result;
-
-        SDL_Surface *surface = TTF_RenderUTF8_Blended(font, text.c_str(), color);
-        if (!surface) return result;
-
-        result.texture = SDL_CreateTextureFromSurface(renderer, surface);
-        result.w = surface->w;
-        result.h = surface->h;
-        SDL_FreeSurface(surface);
-        return result;
-    }
-
     static void draw_text(SDL_Renderer *renderer, TTF_Font *font,
             const std::string &text, int x, int y, SDL_Color color) {
-        auto cache = render_text_cached(renderer, font, text, color);
-        if (!cache.texture) return;
-
-        SDL_Rect dst = { x, y, cache.w, cache.h };
-        SDL_RenderCopy(renderer, cache.texture, nullptr, &dst);
-        SDL_DestroyTexture(cache.texture);
+        if (text.empty()) return;
+        SDL_Surface *surface = TTF_RenderUTF8_Blended(font, text.c_str(), color);
+        if (!surface) return;
+        SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surface);
+        SDL_Rect dst = { x, y, surface->w, surface->h };
+        SDL_FreeSurface(surface);
+        SDL_RenderCopy(renderer, tex, nullptr, &dst);
+        SDL_DestroyTexture(tex);
     }
 
     static void draw_text_centered(SDL_Renderer *renderer, TTF_Font *font,
             const std::string &text, int center_x, int y, SDL_Color color) {
-        auto cache = render_text_cached(renderer, font, text, color);
-        if (!cache.texture) return;
+        if (text.empty()) return;
+        SDL_Surface *surface = TTF_RenderUTF8_Blended(font, text.c_str(), color);
+        if (!surface) return;
+        SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surface);
+        SDL_Rect dst = { center_x - surface->w / 2, y, surface->w, surface->h };
+        SDL_FreeSurface(surface);
+        SDL_RenderCopy(renderer, tex, nullptr, &dst);
+        SDL_DestroyTexture(tex);
+    }
 
-        SDL_Rect dst = { center_x - cache.w / 2, y, cache.w, cache.h };
-        SDL_RenderCopy(renderer, cache.texture, nullptr, &dst);
-        SDL_DestroyTexture(cache.texture);
+    static SDL_Texture *load_app_icon(SDL_Renderer *renderer, emulator_state &state,
+            applist_server *svr, fbs_server *fbss, apa_app_registry &reg, int icon_size) {
+        io_system *io = state.symsys->get_io_system();
+        std::string app_name = common::ucs2_to_utf8(reg.mandatory_info.long_caption.to_std_string(nullptr));
+
+        const std::u16string path_ext = common::lowercase_ucs2_string(path_extension(reg.icon_file_path));
+        std::string icon_path_utf8 = common::ucs2_to_utf8(reg.icon_file_path);
+
+        LOG_TRACE(FRONTEND_CMDLINE, "Icon for '{}': path='{}' ext='{}' fbss={}",
+            app_name, icon_path_utf8,
+            common::ucs2_to_utf8(path_ext),
+            fbss ? "yes" : "no");
+
+        // Try MIF icon file (SVG-based vector icons)
+        if (path_ext == u".mif" && io) {
+            symfile file_route = io->open_file(reg.icon_file_path, READ_MODE | BIN_MODE);
+            if (file_route) {
+                ro_file_stream file_route_stream(file_route.get());
+                loader::mif_file file_mif_parser(reinterpret_cast<common::ro_stream *>(&file_route_stream));
+
+                if (file_mif_parser.do_parse()) {
+                    std::vector<std::uint8_t> data;
+                    int dest_size = 0;
+                    if (file_mif_parser.read_mif_entry(0, nullptr, dest_size) && dest_size > 0) {
+                        data.resize(dest_size);
+                        file_mif_parser.read_mif_entry(0, data.data(), dest_size);
+
+                        common::ro_buf_stream inside_stream(data.data(), data.size());
+                        loader::mif_icon_header header;
+                        inside_stream.read(&header, sizeof(loader::mif_icon_header));
+
+                        if (header.type == loader::mif_icon_type_svg) {
+                            std::string tmp_path = fmt::format("/tmp/eka2l1_icon_{:08X}.svg", reg.mandatory_info.uid);
+                            {
+                                common::wo_std_file_stream outfile(tmp_path, true);
+                                std::vector<loader::svgb_convert_error_description> errors;
+                                if (!loader::convert_svgb_to_svg(inside_stream, outfile, errors)) {
+                                    if (!errors.empty() && errors[0].reason_ == loader::svgb_convert_error_invalid_file) {
+                                        outfile.write(reinterpret_cast<const char *>(data.data()) + sizeof(loader::mif_icon_header),
+                                            data.size() - sizeof(loader::mif_icon_header));
+                                    }
+                                }
+                            }
+                            auto document = lunasvg::Document::loadFromFile(tmp_path);
+                            common::remove(tmp_path);
+
+                            if (document) {
+                                auto bitmap = document->renderToBitmap(icon_size, icon_size);
+                                if (bitmap.valid()) {
+                                    bitmap.convertToRGBA();
+                                    SDL_Surface *surf = SDL_CreateRGBSurfaceFrom(
+                                        bitmap.data(), bitmap.width(), bitmap.height(), 32, bitmap.stride(),
+                                        0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+                                    if (surf) {
+                                        SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
+                                        SDL_FreeSurface(surf);
+                                        LOG_TRACE(FRONTEND_CMDLINE, "  MIF/SVG icon loaded OK");
+                                        return tex;
+                                    }
+                                }
+                            }
+                        } else {
+                            // Try NVG to SVG conversion
+                            std::string tmp_path = fmt::format("/tmp/eka2l1_icon_{:08X}.svg", reg.mandatory_info.uid);
+                            {
+                                inside_stream = common::ro_buf_stream(
+                                    data.data() + sizeof(loader::mif_icon_header),
+                                    data.size() - sizeof(loader::mif_icon_header));
+                                common::wo_std_file_stream outfile(tmp_path, true);
+                                std::vector<loader::nvg_convert_error_description> errors_nvg;
+                                loader::convert_nvg_to_svg(inside_stream, outfile, errors_nvg);
+                            }
+                            auto document = lunasvg::Document::loadFromFile(tmp_path);
+                            common::remove(tmp_path);
+
+                            if (document) {
+                                auto bitmap = document->renderToBitmap(icon_size, icon_size);
+                                if (bitmap.valid()) {
+                                    bitmap.convertToRGBA();
+                                    SDL_Surface *surf = SDL_CreateRGBSurfaceFrom(
+                                        bitmap.data(), bitmap.width(), bitmap.height(), 32, bitmap.stride(),
+                                        0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+                                    if (surf) {
+                                        SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
+                                        SDL_FreeSurface(surf);
+                                        LOG_TRACE(FRONTEND_CMDLINE, "  MIF/NVG icon loaded OK");
+                                        return tex;
+                                    }
+                                }
+                            }
+                        }
+                        LOG_TRACE(FRONTEND_CMDLINE, "  MIF icon conversion/render failed");
+                    } else {
+                        LOG_TRACE(FRONTEND_CMDLINE, "  MIF read_entry failed");
+                    }
+                } else {
+                    LOG_TRACE(FRONTEND_CMDLINE, "  MIF parse failed");
+                }
+            } else {
+                LOG_TRACE(FRONTEND_CMDLINE, "  MIF file open failed");
+            }
+        }
+
+        // Try MBM icon file
+        if (path_ext == u".mbm" && io) {
+            symfile file_route = io->open_file(reg.icon_file_path, READ_MODE | BIN_MODE);
+            if (file_route) {
+                ro_file_stream file_route_stream(file_route.get());
+                loader::mbm_file file_mbm_parser(reinterpret_cast<common::ro_stream *>(&file_route_stream));
+
+                if (file_mbm_parser.do_read_headers() && !file_mbm_parser.sbm_headers.empty()) {
+                    auto *hdr = &file_mbm_parser.sbm_headers[0];
+                    int w = hdr->size_pixels.x, h = hdr->size_pixels.y;
+                    LOG_TRACE(FRONTEND_CMDLINE, "  MBM icon: {}x{}", w, h);
+                    std::vector<std::uint8_t> rgba(w * h * 4);
+                    common::wo_buf_stream wstream(rgba.data(), rgba.size());
+
+                    if (epoc::convert_to_rgba8888(fbss, file_mbm_parser, 0, wstream)) {
+                        SDL_Surface *surf = SDL_CreateRGBSurfaceFrom(rgba.data(), w, h, 32, w * 4,
+                            0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+                        if (surf) {
+                            SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
+                            SDL_FreeSurface(surf);
+                            LOG_TRACE(FRONTEND_CMDLINE, "  MBM icon loaded OK");
+                            return tex;
+                        }
+                    } else {
+                        LOG_TRACE(FRONTEND_CMDLINE, "  MBM convert_to_rgba8888 failed");
+                    }
+                } else {
+                    LOG_TRACE(FRONTEND_CMDLINE, "  MBM read_headers failed");
+                }
+            } else {
+                LOG_TRACE(FRONTEND_CMDLINE, "  MBM file open failed");
+            }
+        }
+
+        // Try get_icon (works for apps with bitmap icons in the applist server)
+        if (fbss) {
+            std::optional<apa_app_masked_icon_bitmap> icon_pair = svr->get_icon(reg, 0);
+            if (icon_pair.has_value() && icon_pair->first) {
+                epoc::bitwise_bitmap *bmp = icon_pair->first;
+                int w = bmp->header_.size_pixels.x, h = bmp->header_.size_pixels.y;
+                LOG_TRACE(FRONTEND_CMDLINE, "  get_icon bitmap: {}x{}", w, h);
+                if (w > 0 && h > 0 && w < 512 && h < 512) {
+                    std::vector<std::uint8_t> rgba(w * h * 4);
+                    common::wo_buf_stream wstream(rgba.data(), rgba.size());
+
+                    if (epoc::convert_to_rgba8888(fbss, bmp, wstream)) {
+                        SDL_Surface *surf = SDL_CreateRGBSurfaceFrom(rgba.data(), w, h, 32, w * 4,
+                            0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+                        if (surf) {
+                            SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
+                            SDL_FreeSurface(surf);
+                            LOG_TRACE(FRONTEND_CMDLINE, "  get_icon loaded OK");
+                            return tex;
+                        }
+                    } else {
+                        LOG_TRACE(FRONTEND_CMDLINE, "  get_icon convert failed");
+                    }
+                }
+            } else {
+                LOG_TRACE(FRONTEND_CMDLINE, "  get_icon returned nothing");
+            }
+        }
+
+        LOG_TRACE(FRONTEND_CMDLINE, "  No icon found for '{}'", app_name);
+        return nullptr;
+    }
+
+    static SDL_Texture *make_placeholder_icon(SDL_Renderer *renderer, TTF_Font *font,
+            const std::string &name, std::uint32_t uid, int size) {
+        std::uint32_t hash = uid * 2654435761u;
+        Uint8 r = 60 + (hash & 0x7F);
+        Uint8 g = 60 + ((hash >> 8) & 0x7F);
+        Uint8 b = 60 + ((hash >> 16) & 0x7F);
+
+        SDL_Surface *surf = SDL_CreateRGBSurface(0, size, size, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+        if (!surf) return nullptr;
+
+        SDL_FillRect(surf, nullptr, SDL_MapRGBA(surf->format, r, g, b, 255));
+
+        // Draw border
+        SDL_Rect top = { 0, 0, size, 1 }, bot = { 0, size - 1, size, 1 };
+        SDL_Rect lft = { 0, 0, 1, size }, rgt = { size - 1, 0, 1, size };
+        Uint32 border_col = SDL_MapRGBA(surf->format, r / 2, g / 2, b / 2, 255);
+        SDL_FillRect(surf, &top, border_col);
+        SDL_FillRect(surf, &bot, border_col);
+        SDL_FillRect(surf, &lft, border_col);
+        SDL_FillRect(surf, &rgt, border_col);
+
+        // Draw first letter
+        if (font && !name.empty()) {
+            char letter[2] = { name[0], 0 };
+            if (letter[0] >= 'a' && letter[0] <= 'z') letter[0] -= 32;
+            SDL_Color white = { 255, 255, 255, 255 };
+            SDL_Surface *txt = TTF_RenderUTF8_Blended(font, letter, white);
+            if (txt) {
+                SDL_Rect dst = { (size - txt->w) / 2, (size - txt->h) / 2, txt->w, txt->h };
+                SDL_BlitSurface(txt, nullptr, surf, &dst);
+                SDL_FreeSurface(txt);
+            }
+        }
+
+        SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
+        SDL_FreeSurface(surf);
+        return tex;
     }
 
     bool show_app_launcher(emulator_state &state) {
@@ -835,22 +1033,23 @@ namespace eka2l1::sdl {
         applist_server *svr = reinterpret_cast<applist_server *>(
             kern->get_by_name<service::server>(
                 get_app_list_server_name_by_epocver(kern->get_epoc_version())));
-
         if (!svr) {
             LOG_ERROR(FRONTEND_CMDLINE, "App list server not available");
             return false;
         }
 
+        fbs_server *fbss = reinterpret_cast<fbs_server *>(
+            kern->get_by_name<service::server>(
+                epoc::get_fbs_server_name_by_epocver(kern->get_epoc_version())));
+
         auto &regs = svr->get_registerations();
-        if (regs.empty()) {
-            LOG_WARN(FRONTEND_CMDLINE, "No applications installed");
-            return false;
-        }
+        if (regs.empty()) return false;
 
         struct app_entry {
             std::string name;
             std::uint32_t uid;
             int reg_index;
+            SDL_Texture *icon = nullptr;
         };
 
         std::vector<app_entry> apps;
@@ -863,16 +1062,16 @@ namespace eka2l1::sdl {
             entry.uid = regs[i].mandatory_info.uid;
             entry.reg_index = static_cast<int>(i);
 
-            if (entry.name.empty())
-                entry.name = "(UID: 0x" + fmt::format("{:08X}", entry.uid) + ")";
+            // Trim whitespace-only names
+            bool has_visible = false;
+            for (char c : entry.name) { if (c != ' ') { has_visible = true; break; } }
+            if (!has_visible)
+                entry.name = fmt::format("(0x{:08X})", entry.uid);
 
             apps.push_back(std::move(entry));
         }
 
-        if (apps.empty()) {
-            LOG_WARN(FRONTEND_CMDLINE, "No user applications found");
-            return false;
-        }
+        if (apps.empty()) return false;
 
         if (TTF_Init() != 0) {
             LOG_ERROR(FRONTEND_CMDLINE, "TTF_Init failed: {}", TTF_GetError());
@@ -882,58 +1081,67 @@ namespace eka2l1::sdl {
         SDL_Window *win = SDL_CreateWindow("EKA2L1 - App Launcher",
             SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
             800, 600, SDL_WINDOW_SHOWN | SDL_WINDOW_FULLSCREEN_DESKTOP);
-
-        if (!win) {
-            LOG_ERROR(FRONTEND_CMDLINE, "Failed to create launcher window: {}", SDL_GetError());
-            TTF_Quit();
-            return false;
-        }
+        if (!win) { TTF_Quit(); return false; }
 
         SDL_Renderer *renderer = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
-        if (!renderer) {
-            LOG_ERROR(FRONTEND_CMDLINE, "Failed to create renderer: {}", SDL_GetError());
-            SDL_DestroyWindow(win);
-            TTF_Quit();
-            return false;
-        }
+        if (!renderer) { SDL_DestroyWindow(win); TTF_Quit(); return false; }
 
         int win_w, win_h;
         SDL_GetWindowSize(win, &win_w, &win_h);
 
-        int font_size = std::max(16, win_h / 25);
-        TTF_Font *font = load_launcher_font(font_size);
-        TTF_Font *font_small = load_launcher_font(std::max(12, font_size * 3 / 4));
-        TTF_Font *font_title = load_launcher_font(std::max(20, font_size * 5 / 4));
+        const int icon_size = std::max(48, win_h / 8);
+        const int cell_pad = 12;
+        const int name_font_size = std::max(10, icon_size / 5);
+        const int title_font_size = std::max(16, win_h / 30);
 
-        if (!font) {
-            LOG_ERROR(FRONTEND_CMDLINE, "Failed to load any font for launcher");
+        TTF_Font *font_name = load_launcher_font(name_font_size);
+        TTF_Font *font_title = load_launcher_font(title_font_size);
+        TTF_Font *font_icon = load_launcher_font(icon_size / 2);
+
+        if (!font_name) {
             SDL_DestroyRenderer(renderer);
             SDL_DestroyWindow(win);
             TTF_Quit();
             return false;
         }
 
+        int name_line_h = TTF_FontLineSkip(font_name);
+        int cell_w = icon_size + cell_pad * 2;
+        int cell_h = icon_size + name_line_h * 2 + cell_pad * 2;
+        int title_h = font_title ? TTF_FontLineSkip(font_title) + 16 : 40;
+        int hint_h = name_line_h + 10;
+
+        int grid_top = title_h;
+        int grid_bottom = win_h - hint_h;
+        int grid_area_h = grid_bottom - grid_top;
+
+        int cols = std::max(1, win_w / cell_w);
+        int rows_visible = std::max(1, grid_area_h / cell_h);
+
+        // Center the grid horizontally
+        int grid_left = (win_w - cols * cell_w) / 2;
+
+        // Load icons
+        LOG_INFO(FRONTEND_CMDLINE, "Loading icons for {} apps...", apps.size());
+        for (auto &app : apps) {
+            app.icon = load_app_icon(renderer, state, svr, fbss, regs[app.reg_index], icon_size);
+            if (!app.icon)
+                app.icon = make_placeholder_icon(renderer, font_icon, app.name, app.uid, icon_size);
+        }
+        LOG_INFO(FRONTEND_CMDLINE, "Icon loading complete");
+
         const SDL_Color color_bg = { 25, 25, 35, 255 };
         const SDL_Color color_title = { 100, 180, 255, 255 };
-        const SDL_Color color_normal = { 200, 200, 200, 255 };
-        const SDL_Color color_selected_text = { 255, 255, 255, 255 };
+        const SDL_Color color_normal = { 190, 190, 190, 255 };
+        const SDL_Color color_sel_text = { 255, 255, 255, 255 };
         const SDL_Color color_hint = { 128, 128, 128, 255 };
-        const SDL_Color color_uid = { 160, 160, 160, 255 };
-        const SDL_Color color_highlight = { 50, 80, 140, 255 };
-
-        int line_height = TTF_FontLineSkip(font) + 4;
-        int title_height = font_title ? TTF_FontLineSkip(font_title) + 8 : line_height + 8;
-        int hint_height = font_small ? TTF_FontLineSkip(font_small) + 8 : line_height;
-
-        int list_top = title_height + 20;
-        int list_bottom = win_h - hint_height - 20;
-        int visible_count = (list_bottom - list_top) / line_height;
-        if (visible_count < 1) visible_count = 1;
+        const SDL_Color color_sel_bg = { 50, 80, 140, 255 };
 
         int selected = 0;
-        int scroll_offset = 0;
+        int scroll_row = 0;
         bool running = true;
         bool app_selected = false;
+        int total_count = static_cast<int>(apps.size());
 
         while (running) {
             SDL_Event event;
@@ -944,23 +1152,25 @@ namespace eka2l1::sdl {
                     break;
                 case SDL_KEYDOWN:
                     switch (event.key.keysym.sym) {
-                    case SDLK_UP:
+                    case SDLK_RIGHT:
+                        if (selected < total_count - 1) selected++;
+                        break;
+                    case SDLK_LEFT:
                         if (selected > 0) selected--;
                         break;
                     case SDLK_DOWN:
-                        if (selected < static_cast<int>(apps.size()) - 1) selected++;
+                        if (selected + cols < total_count) selected += cols;
+                        else selected = total_count - 1;
                         break;
-                    case SDLK_PAGEUP:
-                        selected = std::max(0, selected - visible_count);
+                    case SDLK_UP:
+                        if (selected - cols >= 0) selected -= cols;
+                        else selected = 0;
                         break;
                     case SDLK_PAGEDOWN:
-                        selected = std::min(static_cast<int>(apps.size()) - 1, selected + visible_count);
+                        selected = std::min(total_count - 1, selected + cols * rows_visible);
                         break;
-                    case SDLK_HOME:
-                        selected = 0;
-                        break;
-                    case SDLK_END:
-                        selected = static_cast<int>(apps.size()) - 1;
+                    case SDLK_PAGEUP:
+                        selected = std::max(0, selected - cols * rows_visible);
                         break;
                     case SDLK_RETURN:
                     case SDLK_KP_ENTER: {
@@ -988,71 +1198,94 @@ namespace eka2l1::sdl {
                 }
             }
 
-            if (selected < scroll_offset)
-                scroll_offset = selected;
-            if (selected >= scroll_offset + visible_count)
-                scroll_offset = selected - visible_count + 1;
+            // Keep selected item visible
+            int sel_row = selected / cols;
+            if (sel_row < scroll_row)
+                scroll_row = sel_row;
+            if (sel_row >= scroll_row + rows_visible)
+                scroll_row = sel_row - rows_visible + 1;
 
             SDL_SetRenderDrawColor(renderer, color_bg.r, color_bg.g, color_bg.b, 255);
             SDL_RenderClear(renderer);
 
             // Title
-            std::string title = "EKA2L1 - Select Application (" + std::to_string(apps.size()) + " apps)";
-            draw_text_centered(renderer, font_title ? font_title : font, title,
-                win_w / 2, 10, color_title);
+            std::string title = "EKA2L1 - Select Application (" + std::to_string(total_count) + ")";
+            draw_text_centered(renderer, font_title ? font_title : font_name, title,
+                win_w / 2, 8, color_title);
 
-            // App list
-            int y = list_top;
-            for (int i = scroll_offset; i < static_cast<int>(apps.size()) && i < scroll_offset + visible_count; i++) {
-                bool is_sel = (i == selected);
+            // Grid
+            for (int row = scroll_row; row < scroll_row + rows_visible; row++) {
+                for (int col = 0; col < cols; col++) {
+                    int idx = row * cols + col;
+                    if (idx >= total_count) break;
 
-                if (is_sel) {
-                    SDL_SetRenderDrawColor(renderer, color_highlight.r, color_highlight.g, color_highlight.b, 255);
-                    SDL_Rect highlight_rect = { 10, y - 2, win_w - 20, line_height };
-                    SDL_RenderFillRect(renderer, &highlight_rect);
+                    int cx = grid_left + col * cell_w + cell_pad;
+                    int cy = grid_top + (row - scroll_row) * cell_h + cell_pad;
+                    bool is_sel = (idx == selected);
+
+                    if (is_sel) {
+                        SDL_SetRenderDrawColor(renderer, color_sel_bg.r, color_sel_bg.g, color_sel_bg.b, 255);
+                        SDL_Rect sel_rect = { cx - 4, cy - 4, cell_w - cell_pad + 8, cell_h - cell_pad + 8 };
+                        SDL_RenderFillRect(renderer, &sel_rect);
+                    }
+
+                    // Icon
+                    if (apps[idx].icon) {
+                        SDL_Rect icon_rect = { cx, cy, icon_size, icon_size };
+                        SDL_RenderCopy(renderer, apps[idx].icon, nullptr, &icon_rect);
+                    }
+
+                    // Name (truncate if too long)
+                    std::string display_name = apps[idx].name;
+                    int max_text_w = cell_w - cell_pad;
+                    int text_w = 0, text_h = 0;
+                    TTF_SizeUTF8(font_name, display_name.c_str(), &text_w, &text_h);
+                    while (text_w > max_text_w && display_name.size() > 3) {
+                        display_name.pop_back();
+                        display_name.back() = '.';
+                        TTF_SizeUTF8(font_name, display_name.c_str(), &text_w, &text_h);
+                    }
+
+                    int text_x = cx + (icon_size - text_w) / 2;
+                    int text_y = cy + icon_size + 4;
+                    draw_text(renderer, font_name, display_name, text_x, text_y,
+                        is_sel ? color_sel_text : color_normal);
                 }
-
-                std::string label = std::to_string(i + 1) + ". " + apps[i].name;
-                draw_text(renderer, font, label, 20, y,
-                    is_sel ? color_selected_text : color_normal);
-
-                std::string uid_str = fmt::format("0x{:08X}", apps[i].uid);
-                int uid_w = 0, uid_h = 0;
-                TTF_SizeUTF8(font_small ? font_small : font, uid_str.c_str(), &uid_w, &uid_h);
-                draw_text(renderer, font_small ? font_small : font, uid_str,
-                    win_w - uid_w - 20, y + (line_height - uid_h) / 2, color_uid);
-
-                y += line_height;
             }
 
-            // Scroll indicator
-            if (static_cast<int>(apps.size()) > visible_count) {
-                int bar_x = win_w - 8;
-                int bar_h = list_bottom - list_top;
-                int thumb_h = std::max(20, bar_h * visible_count / static_cast<int>(apps.size()));
-                int thumb_y = list_top + (bar_h - thumb_h) * scroll_offset / std::max(1, static_cast<int>(apps.size()) - visible_count);
+            // Scrollbar
+            int total_rows = (total_count + cols - 1) / cols;
+            if (total_rows > rows_visible) {
+                int bar_x = win_w - 6;
+                int bar_h = grid_area_h;
+                int thumb_h = std::max(16, bar_h * rows_visible / total_rows);
+                int thumb_y = grid_top + (bar_h - thumb_h) * scroll_row / std::max(1, total_rows - rows_visible);
 
-                SDL_SetRenderDrawColor(renderer, 60, 60, 60, 255);
-                SDL_Rect bar_rect = { bar_x, list_top, 6, bar_h };
+                SDL_SetRenderDrawColor(renderer, 50, 50, 50, 255);
+                SDL_Rect bar_rect = { bar_x, grid_top, 4, bar_h };
                 SDL_RenderFillRect(renderer, &bar_rect);
 
                 SDL_SetRenderDrawColor(renderer, 120, 120, 120, 255);
-                SDL_Rect thumb_rect = { bar_x, thumb_y, 6, thumb_h };
+                SDL_Rect thumb_rect = { bar_x, thumb_y, 4, thumb_h };
                 SDL_RenderFillRect(renderer, &thumb_rect);
             }
 
-            // Bottom hints
-            draw_text_centered(renderer, font_small ? font_small : font,
-                "Up/Down: Navigate   Enter: Launch   Esc: Quit",
-                win_w / 2, win_h - hint_height - 5, color_hint);
+            // Hints
+            draw_text_centered(renderer, font_name,
+                "Arrows: Navigate   Enter: Launch   Esc: Quit",
+                win_w / 2, win_h - hint_h, color_hint);
 
             SDL_RenderPresent(renderer);
             SDL_Delay(16);
         }
 
-        if (font_title && font_title != font) TTF_CloseFont(font_title);
-        if (font_small && font_small != font) TTF_CloseFont(font_small);
-        TTF_CloseFont(font);
+        // Cleanup
+        for (auto &app : apps) {
+            if (app.icon) SDL_DestroyTexture(app.icon);
+        }
+        if (font_icon) TTF_CloseFont(font_icon);
+        if (font_title && font_title != font_name) TTF_CloseFont(font_title);
+        TTF_CloseFont(font_name);
         TTF_Quit();
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(win);
