@@ -688,7 +688,7 @@ namespace eka2l1::sdl {
             return false;
         }
         std::cout << "SIS package installed successfully." << std::endl;
-        return true;
+        return false;
     }
 
     static bool install_device_handler(common::arg_parser *parser, void *userdata, std::string *err) {
