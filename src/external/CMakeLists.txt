@@ -171,10 +171,17 @@ set (USE_AAUDIO FALSE CACHE INTERNAL "" FORCE)
 add_subdirectory(cubeb)
 
 
-# FFMPEG
-add_subdirectory(ffmpeg)
+# FFMPEG — NextOS: link against system FFmpeg 8.x instead of the vendored
+# 4.x sources. The submodule is left on disk but its CMakeLists is bypassed
+# to avoid its old headers conflicting with the 8.x ones from the sysroot.
+if (NOT DEFINED FFMPEG_CORE_NAME)
+    set(FFMPEG_CORE_NAME ffmpeg)
+endif()
+add_library(${FFMPEG_CORE_NAME} INTERFACE)
+target_link_libraries(${FFMPEG_CORE_NAME} INTERFACE
+    avformat avcodec avutil swscale swresample z)
 if (APPLE)
-    target_link_libraries(ffmpeg INTERFACE "-framework CoreVideo" "iconv")
+    target_link_libraries(${FFMPEG_CORE_NAME} INTERFACE "-framework CoreVideo" "iconv")
 endif()
 
 if (CMAKE_CROSSCOMPILING)

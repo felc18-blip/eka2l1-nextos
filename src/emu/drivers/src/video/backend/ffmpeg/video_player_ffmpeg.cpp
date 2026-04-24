@@ -1,3 +1,4 @@
+#include "drivers/audio/backend/ffmpeg/ffmpeg8_compat.h"
 /*
  * Copyright (c) 2022 EKA2L1 Team.
  * 

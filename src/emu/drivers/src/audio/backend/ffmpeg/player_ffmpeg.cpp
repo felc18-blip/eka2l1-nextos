@@ -1,3 +1,4 @@
+#include "drivers/audio/backend/ffmpeg/ffmpeg8_compat.h"
 /*
  * Copyright (c) 2020 EKA2L1 Team.
  * 
@@ -136,13 +137,13 @@ namespace eka2l1::drivers {
             return;
         }
 
-        if (av_read_frame(format_context_, &packet_) < 0) {
+        if (av_read_frame(format_context_, packet_) < 0) {
             flags_ |= 1;
             return;
         }
 
         // Send packet to decoder
-        if (avcodec_send_packet(codec_, &packet_) >= 0) {
+        if (avcodec_send_packet(codec_, packet_) >= 0) {
             AVFrame *frame = av_frame_alloc();
             int err = avcodec_receive_frame(codec_, frame);
 
@@ -439,7 +440,7 @@ namespace eka2l1::drivers {
         , custom_io_(nullptr)
         , custom_io_buffer_(nullptr)
         , duration_us_(0) {
-        av_init_packet(&packet_);
+        packet_ = av_packet_alloc();
     }
 
     player_ffmpeg::~player_ffmpeg() {
