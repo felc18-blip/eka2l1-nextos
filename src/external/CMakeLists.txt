@@ -207,8 +207,11 @@ endif()
 # libfat
 add_subdirectory(libfat)
 
-# mbedtls
+# mbedtls — NextOS: also turn off the sample programs subdir. The ssl_*
+# binaries depend on a POSIX host filesystem and fail to link in cross
+# builds that hand-roll sysroots; we only need the libmbedcrypto/tls libs.
 set(ENABLE_TESTING OFF CACHE BOOL "Build mbed TLS tests." FORCE)
+set(ENABLE_PROGRAMS OFF CACHE BOOL "Build mbed TLS programs." FORCE)
 add_subdirectory(mbedtls)
 
 # SQLite3
