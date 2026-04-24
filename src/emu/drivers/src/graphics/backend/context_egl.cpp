@@ -97,8 +97,8 @@ namespace eka2l1::drivers::graphics {
                 return false;
             }
         } else {
-            std::array<EGLint, 5> egl_context_attrib_template{ EGL_CONTEXT_MAJOR_VERSION, 0,
-                EGL_CONTEXT_MINOR_VERSION, 0, EGL_NONE };
+            std::array<EGLint, 5> egl_context_attrib_template{ EGL_CONTEXT_MAJOR_VERSION_KHR, 0,
+                EGL_CONTEXT_MINOR_VERSION_KHR, 0, EGL_NONE };
             
             if (target_version != nullptr) {
                 egl_context_attrib_template[1] = target_version->first;
