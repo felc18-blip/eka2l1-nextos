@@ -91,7 +91,7 @@ namespace eka2l1::drivers {
             return false;
         }
 
-        channels_ = codec_->channels;
+        channels_ = codec_->ch_layout.nb_channels;
         freq_ = codec_->sample_rate;
 
         const double time_base = av_q2d(stream->time_base);
@@ -162,15 +162,20 @@ namespace eka2l1::drivers {
 
             data_.resize(base_ptr + channels_ * frame->nb_samples * sizeof(std::int16_t));
 
-            if ((frame->format != AV_SAMPLE_FMT_S16) || (frame->channels != channels_)
+            if ((frame->format != AV_SAMPLE_FMT_S16) || (frame->ch_layout.nb_channels != channels_)
                 || (frame->sample_rate != freq_)) {
                 // Resample it
-                const int dest_channel_type = (channels_ == 2) ? AV_CH_LAYOUT_STEREO : AV_CH_LAYOUT_MONO;
+                AVChannelLayout dest_ch_layout;
+                av_channel_layout_from_mask(&dest_ch_layout,
+                    (channels_ == 2) ? AV_CH_LAYOUT_STEREO : AV_CH_LAYOUT_MONO);
 
-                SwrContext *swr = swr_alloc_set_opts(nullptr,
-                    dest_channel_type, AV_SAMPLE_FMT_S16, freq_,
-                    frame->channel_layout, static_cast<AVSampleFormat>(frame->format), frame->sample_rate,
+                SwrContext *swr = nullptr;
+                swr_alloc_set_opts2(&swr,
+                    &dest_ch_layout, AV_SAMPLE_FMT_S16, freq_,
+                    &frame->ch_layout, static_cast<AVSampleFormat>(frame->format), frame->sample_rate,
                     0, nullptr);
+
+                av_channel_layout_uninit(&dest_ch_layout);
 
                 if (swr_init(swr) < 0) {
                     LOG_ERROR(DRIVER_AUD, "Error initializing SWR context");
@@ -208,7 +213,8 @@ namespace eka2l1::drivers {
         return ((size <= 0) ? AVERROR_EOF : static_cast<int>(size));
     }
 
-    static int ffmpeg_custom_rw_io_write(void *opaque, std::uint8_t *buf, int buf_size) {
+    // FFmpeg 8: avio_alloc_context now takes a write callback taking const uint8_t*.
+    static int ffmpeg_custom_rw_io_write(void *opaque, const std::uint8_t *buf, int buf_size) {
         common::rw_stream *stream = reinterpret_cast<common::rw_stream *>(opaque);
         const std::uint64_t size = stream->write(buf, buf_size);
 
@@ -323,14 +329,19 @@ namespace eka2l1::drivers {
             return false;
         }
 
-        const std::uint64_t *layout_support_layout = output_encoder_->channel_layouts;
-        while (*layout_support_layout) {
-            if (av_get_channel_layout_nb_channels(*layout_support_layout) == static_cast<std::int32_t>(cn)) {
+        // FFmpeg 8: encoder advertises supported layouts via AVChannelLayout
+        // array terminated by an uninitialized (nb_channels == 0) entry.
+        const AVChannelLayout *layout_it = output_encoder_->ch_layouts;
+        while (layout_it && layout_it->nb_channels) {
+            if (layout_it->nb_channels == static_cast<int>(cn)) {
                 channels_ = cn;
-                channel_layout_dest_ = *layout_support_layout;
-
+                // Keep legacy uint64 mask for consumers that still compare it;
+                // only valid when layout is in NATIVE order.
+                channel_layout_dest_ = (layout_it->order == AV_CHANNEL_ORDER_NATIVE)
+                    ? layout_it->u.mask : 0;
                 return true;
             }
+            ++layout_it;
         }
 
         return false;
@@ -370,13 +381,14 @@ namespace eka2l1::drivers {
             return false;
         }
 
-        if (!(new_codec->supported_samplerates) || !(new_codec->channel_layouts)) {
+        if (!(new_codec->supported_samplerates) || !(new_codec->ch_layouts)) {
             // One of those arrays is empty. Return
             LOG_ERROR(DRIVER_AUD, "Supported sample rates or supported channel layouts array is empty!");
             return false;
         }
 
-        channels_ = av_get_channel_layout_nb_channels(*new_codec->channel_layouts);
+        // FFmpeg 8: first element of ch_layouts is the codec's preferred layout.
+        channels_ = new_codec->ch_layouts[0].nb_channels;
         freq_ = *new_codec->supported_samplerates;
         encoding_ = enc;
         output_encoder_ = new_codec;

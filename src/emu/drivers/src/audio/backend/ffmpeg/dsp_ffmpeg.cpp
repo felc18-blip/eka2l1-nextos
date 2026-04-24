@@ -164,7 +164,7 @@ namespace eka2l1::drivers {
             return false;
         }
 
-        codec_->channels = channels_;
+        av_channel_layout_default(&codec_->ch_layout, channels_);
 
         if (avcodec_open2(codec_, decoder, nullptr) < 0) {
             LOG_ERROR(DRIVER_AUD, "Can't open new context with codec");
@@ -276,11 +276,18 @@ namespace eka2l1::drivers {
             dest.resize(channels_ * frame->nb_samples * sizeof(std::uint16_t));
             timestamp_in_base_ = frame->best_effort_timestamp;
 
-            if ((channels_ != codec_->channels) || (frame->format != AV_SAMPLE_FMT_S16)) {
-                SwrContext *swr = swr_alloc_set_opts(nullptr,
-                    (channels_ == 1) ? AV_CH_LAYOUT_MONO : AV_CH_LAYOUT_STEREO, AV_SAMPLE_FMT_S16, freq_,
-                    frame->channel_layout, static_cast<AVSampleFormat>(frame->format), frame->sample_rate,
+            if ((channels_ != codec_->ch_layout.nb_channels) || (frame->format != AV_SAMPLE_FMT_S16)) {
+                AVChannelLayout dest_ch_layout;
+                av_channel_layout_from_mask(&dest_ch_layout,
+                    (channels_ == 1) ? AV_CH_LAYOUT_MONO : AV_CH_LAYOUT_STEREO);
+
+                SwrContext *swr = nullptr;
+                swr_alloc_set_opts2(&swr,
+                    &dest_ch_layout, AV_SAMPLE_FMT_S16, freq_,
+                    &frame->ch_layout, static_cast<AVSampleFormat>(frame->format), frame->sample_rate,
                     0, nullptr);
+
+                av_channel_layout_uninit(&dest_ch_layout);
 
                 if (swr_init(swr) < 0) {
                     LOG_ERROR(DRIVER_AUD, "Error initializing SWR context");
