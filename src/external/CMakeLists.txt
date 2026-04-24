@@ -76,7 +76,6 @@ if (EKA2L1_ENABLE_SCRIPTING_ABILITY)
         add_subdirectory(luajit-cmake)
 
         # Fix up a bit
-        target_include_directories(buildvm PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/luajit-cmake")
 
         target_link_libraries(liblua INTERFACE luajit::lib luajit::header)
         target_include_directories(liblua INTERFACE "${CMAKE_CURRENT_BINARY_DIR}/luajit-cmake")
