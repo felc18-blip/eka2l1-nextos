@@ -201,6 +201,9 @@ else()
     option(CAPSTONE_XCORE_SUPPORT "XCore support" OFF)
     option(CAPSTONE_X86_SUPPORT "x86 support" OFF)
 
+    # NextOS: capstone bundled uses cmake_policy(SET CMP0048 OLD) which CMake
+    # 4.x rejects (OLD behavior removed). Override to NEW via policy default.
+    set(CMAKE_POLICY_DEFAULT_CMP0048 NEW)
     add_subdirectory(capstone EXCLUDE_FROM_ALL)
 endif()
 
