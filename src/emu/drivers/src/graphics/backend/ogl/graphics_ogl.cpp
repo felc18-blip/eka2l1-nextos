@@ -54,9 +54,16 @@ namespace eka2l1::drivers {
             }
 
             case graphics::gl_context::mode::opengl_es: {
+                // NextOS: gladLoadGLES2Loader returns 0 when ANY function from
+                // its target spec (here GLES 3.0+ headers) fails to load. On
+                // a real GLES 2.0 driver (Mali-450 / libmali blob) functions
+                // like glDrawArraysInstanced / glGenVertexArrays / glMapBuffer
+                // Range come back NULL and glad reports failure even though
+                // the actual ES 2.0 entry points loaded fine. Downgrade the
+                // critical to a warning and keep going — the renderer may
+                // still work for paths that only touch ES 2.0 features.
                 if (!gladLoadGLES2Loader((GLADloadproc) eglGetProcAddress)) {
-                    LOG_CRITICAL(DRIVER_GRAPHICS, "gladLoadGLES2Loader() failed");
-                    return;
+                    LOG_WARN(DRIVER_GRAPHICS, "gladLoadGLES2Loader() returned 0 — some ES 3.0+ entry points unavailable on this driver, continuing anyway");
                 }
 
                 break;
