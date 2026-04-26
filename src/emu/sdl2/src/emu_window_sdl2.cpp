@@ -37,8 +37,14 @@ namespace eka2l1::sdl {
     void emu_window_sdl2::init(std::string title, vec2 size, const std::uint32_t flags) {
         Uint32 sdl_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
 
-        if (flags & drivers::emu_window_flag_fullscreen)
-            sdl_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+        // NextOS / Amlogic-old: with the Mali fbdev backend SDL2 won't paint
+        // anything outside the window's pixel rectangle, so a 240x320 phone
+        // window leaves the rest of the 1280x720 TV black. Always force
+        // fullscreen so the emulator output covers the screen — emustation
+        // is stopped anyway during a game and the embedded Symbian display
+        // is letterboxed inside the OpenGL viewport by the renderer.
+        sdl_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+        (void)flags;  // emu_window_flag_fullscreen now always implied
 
         sdl_window_ = SDL_CreateWindow(title.c_str(),
             SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
