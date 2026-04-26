@@ -288,6 +288,10 @@ namespace eka2l1::drivers {
         context_->set_swap_interval(1);
 
         is_gles = (context_->gl_mode() == graphics::gl_context::mode::opengl_es);
+        // NextOS GLES2 port: publish the flag so helpers in
+        // texture_ogl / fb_ogl / buffer_ogl can pick ES 2-safe enums
+        // without holding a driver pointer.
+        eka2l1_ogl_set_strict_active(is_gles);
 
         GLint major_gl = 0;
         GLint minor_gl = 0;

@@ -35,8 +35,15 @@ namespace eka2l1::drivers {
         glGenFramebuffers(1, &fbo);
         bind(nullptr, framebuffer_bind_read_draw);
 
-        // Get max color attachments
-        glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &max_color_attachment);
+        // Get max color attachments.  GL_MAX_COLOR_ATTACHMENTS isn't a
+        // valid pname in ES 2.0 (the spec only defines COLOR_ATTACHMENT0)
+        // so the query returns INVALID_ENUM and leaves max_color_attachment
+        // uninitialised.  Hard-code to 1 on the strict path.
+        if (eka2l1_ogl_is_strict_active()) {
+            max_color_attachment = 1;
+        } else {
+            glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &max_color_attachment);
+        }
 
         for (std::size_t i = 0; i < color_buffer_list.size(); i++) {
             if (color_buffers[i]->get_drawable_type() == DRAWABLE_TYPE_RENDERBUFFER) {
@@ -116,6 +123,15 @@ namespace eka2l1::drivers {
     }
 
     static std::pair<GLenum, GLenum> fb_bind_type_to_ogl_enum(const framebuffer_bind_type type) {
+        // NextOS GLES2 port: ES 2.0 only knows GL_FRAMEBUFFER /
+        // GL_FRAMEBUFFER_BINDING; the split DRAW / READ targets are GL
+        // 3.0+ / ES 3.0+ and the Mali blob raises GL_INVALID_ENUM (1280)
+        // when we hand them to glBindFramebuffer.  Coerce everything to
+        // the unified target on the strict path.
+        if (eka2l1_ogl_is_strict_active()) {
+            return { GL_FRAMEBUFFER, GL_FRAMEBUFFER_BINDING };
+        }
+
         switch (type) {
         case framebuffer_bind_draw:
             return { GL_DRAW_FRAMEBUFFER, GL_DRAW_FRAMEBUFFER_BINDING };
@@ -274,6 +290,12 @@ namespace eka2l1::drivers {
     bool ogl_framebuffer::set_read_buffer(const std::int32_t attachment_id) {
         if (!is_attachment_id_valid(attachment_id)) {
             return false;
+        }
+
+        // glReadBuffer is GL 3.0+/ES 3.0+; on ES 2.0 the read source is
+        // implicitly COLOR_ATTACHMENT0, which is the only allowed value.
+        if (eka2l1_ogl_is_strict_active()) {
+            return (attachment_id == 0);
         }
 
         glReadBuffer(GL_COLOR_ATTACHMENT0 + attachment_id);
