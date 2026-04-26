@@ -32,7 +32,8 @@ namespace eka2l1::dispatch {
         bool skinning = vertex_statuses & egl_context_es1::VERTEX_STATE_SKINNING_ENABLE;
 
         if (is_es) {
-            input_decl += "#version 300 es\n"
+            // NextOS GLES 1.00: was '300 es' which Mali-450 can't compile.
+            input_decl += "#version 100\n"
                           "precision highp float;\n";
         } else {
             input_decl += "#version 140\n"
@@ -334,7 +335,8 @@ namespace eka2l1::dispatch {
         std::string main_body = "";
 
         if (is_es) {
-            input_decl += "#version 300 es\n"
+            // NextOS GLES 1.00: was '300 es' which Mali-450 can't compile.
+            input_decl += "#version 100\n"
                           "precision mediump float;\n";
         } else {
             input_decl += "#version 140\n";

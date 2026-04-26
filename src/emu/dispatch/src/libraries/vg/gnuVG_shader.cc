@@ -480,7 +480,14 @@ namespace gnuVG {
 		std::string version = "";
 
 		if (drv->is_stricted()) {
-			version = "#version 300 es\n";
+			// NextOS: Mali-450 GLSL only goes up to ES 1.01, so '300 es'
+			// fails to compile. The shader source emitted below uses
+			// 'in/out' qualifiers from ES 3.0; for now we still emit
+			// them but with the lower version header — this means the
+			// gnuVG (vector graphics) path will not work on Mali, but
+			// nothing breaks if no app actually exercises it. Apps
+			// that don't touch OpenVG (Phonebook2 etc.) won't notice.
+			version = "#version 100\nprecision highp float;\n";
 		} else {
 			version = "#version 140\n#extension GL_ARB_explicit_attrib_location : require\n";
 		}

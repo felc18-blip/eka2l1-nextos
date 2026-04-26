@@ -566,7 +566,12 @@ namespace eka2l1::drivers {
         } else {
             pending_upscale_shader_ = "resources//upscale//" + pending_upscale_shader_ + ".frag";
             if (is_gles) {
-                extra_header = "#version 300 es\n";
+                // NextOS: Mali-450 GLSL compiler tops out at GLSL ES 1.01.
+                // Asking for ES 3.0 ('300 es') makes shader compile fail
+                // and the user-selectable upscale shader silently goes
+                // dark. Stay on ES 1.00 — most upscale shaders in
+                // resources/upscale/ are simple enough to compile.
+                extra_header = "#version 100\nprecision highp float;\n";
             } else {
                 extra_header = "#version 140\n";
             }
