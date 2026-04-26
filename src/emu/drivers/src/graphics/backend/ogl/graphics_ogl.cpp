@@ -46,6 +46,58 @@ namespace eka2l1::drivers {
         }
     }
 
+    // NextOS: stubs so unsupported GLES 3.0+ entry points don't segfault on
+    // GLES 2.0 drivers (Mali-450 / libmali). Generated IDs are fake but
+    // unique-enough; bind/delete are no-ops since GLES 2.0 has no real VAOs.
+    static GLuint s_fake_vao_counter = 0;
+    static void GLAPIENTRY stub_glGenVertexArrays(GLsizei n, GLuint *arrays) {
+        for (GLsizei i = 0; i < n; ++i) arrays[i] = ++s_fake_vao_counter;
+    }
+    static void GLAPIENTRY stub_glBindVertexArray(GLuint /*array*/) {}
+    static void GLAPIENTRY stub_glDeleteVertexArrays(GLsizei /*n*/, const GLuint */*arrays*/) {}
+
+    static void GLAPIENTRY stub_glDrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei /*instancecount*/) {
+        // Fall back to a single non-instanced draw — won't render multiple
+        // instances correctly, but at least it doesn't crash.
+        glDrawArrays(mode, first, count);
+    }
+    static void GLAPIENTRY stub_glDrawBuffers(GLsizei /*n*/, const GLenum */*bufs*/) {}
+    static void GLAPIENTRY stub_glBlitFramebuffer(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum) {}
+    static const GLubyte* GLAPIENTRY stub_glGetStringi(GLenum, GLuint) { return nullptr; }
+    static void* GLAPIENTRY stub_glMapBuffer(GLenum, GLenum) { return nullptr; }
+
+    static void install_gles2_compat_stubs() {
+        // OES_vertex_array_object: try to fish the EXT-suffixed entry points
+        // out of the driver first; only fall back to no-op stubs if the
+        // extension isn't there either.
+        if (!glad_glGenVertexArrays) {
+            glad_glGenVertexArrays = (PFNGLGENVERTEXARRAYSPROC)eglGetProcAddress("glGenVertexArraysOES");
+            if (!glad_glGenVertexArrays) glad_glGenVertexArrays = stub_glGenVertexArrays;
+        }
+        if (!glad_glBindVertexArray) {
+            glad_glBindVertexArray = (PFNGLBINDVERTEXARRAYPROC)eglGetProcAddress("glBindVertexArrayOES");
+            if (!glad_glBindVertexArray) glad_glBindVertexArray = stub_glBindVertexArray;
+        }
+        if (!glad_glDeleteVertexArrays) {
+            glad_glDeleteVertexArrays = (PFNGLDELETEVERTEXARRAYSPROC)eglGetProcAddress("glDeleteVertexArraysOES");
+            if (!glad_glDeleteVertexArrays) glad_glDeleteVertexArrays = stub_glDeleteVertexArrays;
+        }
+        if (!glad_glDrawArraysInstanced) {
+            glad_glDrawArraysInstanced = (PFNGLDRAWARRAYSINSTANCEDPROC)eglGetProcAddress("glDrawArraysInstancedEXT");
+            if (!glad_glDrawArraysInstanced) glad_glDrawArraysInstanced = stub_glDrawArraysInstanced;
+        }
+        if (!glad_glDrawBuffers) {
+            glad_glDrawBuffers = (PFNGLDRAWBUFFERSPROC)eglGetProcAddress("glDrawBuffersEXT");
+            if (!glad_glDrawBuffers) glad_glDrawBuffers = stub_glDrawBuffers;
+        }
+        if (!glad_glBlitFramebuffer) {
+            glad_glBlitFramebuffer = (PFNGLBLITFRAMEBUFFERPROC)eglGetProcAddress("glBlitFramebufferANGLE");
+            if (!glad_glBlitFramebuffer) glad_glBlitFramebuffer = stub_glBlitFramebuffer;
+        }
+        if (!glad_glGetStringi) glad_glGetStringi = stub_glGetStringi;
+        if (!glad_glMapBuffer) glad_glMapBuffer = stub_glMapBuffer;
+    }
+
     void init_gl_graphics_library(graphics::gl_context::mode api) {
         switch (api) {
             case graphics::gl_context::mode::opengl: {
@@ -55,17 +107,15 @@ namespace eka2l1::drivers {
 
             case graphics::gl_context::mode::opengl_es: {
                 // NextOS: gladLoadGLES2Loader returns 0 when ANY function from
-                // its target spec (here GLES 3.0+ headers) fails to load. On
-                // a real GLES 2.0 driver (Mali-450 / libmali blob) functions
-                // like glDrawArraysInstanced / glGenVertexArrays / glMapBuffer
-                // Range come back NULL and glad reports failure even though
-                // the actual ES 2.0 entry points loaded fine. Downgrade the
-                // critical to a warning and keep going — the renderer may
-                // still work for paths that only touch ES 2.0 features.
+                // its target spec (GLES 3.0+ headers) fails to load. On a
+                // real GLES 2.0 driver (libmali on Amlogic-old) ES 3.0 entry
+                // points come back NULL — log a warning and patch the most
+                // common offenders below.
                 if (!gladLoadGLES2Loader((GLADloadproc) eglGetProcAddress)) {
-                    LOG_WARN(DRIVER_GRAPHICS, "gladLoadGLES2Loader() returned 0 — some ES 3.0+ entry points unavailable on this driver, continuing anyway");
+                    LOG_WARN(DRIVER_GRAPHICS, "gladLoadGLES2Loader() returned 0 — some ES 3.0+ entry points unavailable on this driver, installing GLES 2.0 compat shims");
                 }
 
+                install_gles2_compat_stubs();
                 break;
             }
 
