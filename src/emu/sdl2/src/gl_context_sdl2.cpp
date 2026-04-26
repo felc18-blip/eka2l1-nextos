@@ -27,8 +27,14 @@ namespace eka2l1::sdl {
         m_opengl_mode = is_gles ? mode::opengl_es : mode::opengl;
 
         if (is_gles) {
+            // NextOS: Mali-450 / Amlogic-old only supports GLES 2.0. The
+            // upstream code asks for ES 3.0, which makes EGL_BAD_CONFIG on
+            // the libmali blob. Drop to ES 2.0 here. The renderer below
+            // (graphics_ogl.cpp) still uses some ES 3.0 features (UBO,
+            // VAO, instancing) — those will need follow-up patches; this
+            // change just gets the context to create.
             SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
             SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
         } else {
             SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
