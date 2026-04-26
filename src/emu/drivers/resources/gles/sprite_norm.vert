@@ -1,12 +1,12 @@
-#version 300 es
+#version 100
 
 precision highp float;
 
-layout (location = 0) in vec2 in_position;
-layout (location = 1) in vec2 in_texcoord;
+attribute vec2 in_position;
+attribute vec2 in_texcoord;
 
-out vec2 r_texcoord;
-out vec4 r_color;
+varying vec2 r_texcoord;
+varying vec4 r_color;
 
 uniform mat4 u_proj;
 uniform mat4 u_model;

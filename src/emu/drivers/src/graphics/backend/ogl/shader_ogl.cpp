@@ -272,6 +272,17 @@ namespace eka2l1::drivers {
         glAttachShader(program, ogl_vertex_module->shader_handle());
         glAttachShader(program, ogl_fragment_module->shader_handle());
 
+        // NextOS GLES 1.00 port: GLSL ES 1.00 doesn't have the
+        // 'layout(location=N) in vec2 ...' qualifier, so the rewritten
+        // shaders rely on the link step picking attribute slots. The
+        // renderer (graphics_ogl.cpp) hard-codes location 0 for
+        // 'in_position' and location 1 for 'in_texcoord' via
+        // is_stricted(); force those bindings here so the renderer's
+        // assumption holds. Calling glBindAttribLocation on names that
+        // don't exist in a given shader is harmless.
+        glBindAttribLocation(program, 0, "in_position");
+        glBindAttribLocation(program, 1, "in_texcoord");
+
         GLint success = 0;
 
         glLinkProgram(program);

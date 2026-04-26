@@ -1,13 +1,12 @@
-#version 300 es
+#version 100
 
 precision highp float;
 
 uniform sampler2D u_tex;
 uniform vec4 u_color;
 
-in vec2 r_texcoord;
-out vec4 o_color;
+varying vec2 r_texcoord;
 
 void main() {
-    o_color = texture(u_tex, r_texcoord) * (u_color / 255.0);
+    gl_FragColor = texture2D(u_tex, r_texcoord) * (u_color / 255.0);
 }
