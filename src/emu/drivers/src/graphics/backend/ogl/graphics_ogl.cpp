@@ -23,6 +23,9 @@
 #include <common/rgb.h>
 #include <fstream>
 #include <sstream>
+#ifdef __linux__
+#include <dlfcn.h>  // NextOS: dlopen/dlsym for GLES2 compat shim fallback
+#endif
 
 #include <drivers/graphics/backend/ogl/common_ogl.h>
 #include <drivers/graphics/backend/ogl/graphics_ogl.h>
@@ -65,6 +68,128 @@ namespace eka2l1::drivers {
     static void GLAPIENTRY stub_glBlitFramebuffer(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum) {}
     static const GLubyte* GLAPIENTRY stub_glGetStringi(GLenum, GLuint) { return nullptr; }
     static void* GLAPIENTRY stub_glMapBuffer(GLenum, GLenum) { return nullptr; }
+
+    // NextOS: glad's GLES 2.0 loader is generated with EGL/SDL ProcAddress
+    // calls; on the libmali blob those return NULL for both ES 3.0+ AND for
+    // some core ES 2.0 functions (driver bug — works via dlsym instead).
+    // Re-populate every glad pointer that is still null by dlsym'ing the
+    // matching symbol out of libGLESv2.so directly. Without this even
+    // glGetIntegerv ends up NULL and we segfault inside the driver
+    // constructor's first capability query.
+    static void *try_dlsym_glesv2(const char *name) {
+#ifdef __linux__
+        static void *libgles = nullptr;
+        if (!libgles) {
+            libgles = dlopen("libGLESv2.so.2", RTLD_LAZY | RTLD_GLOBAL);
+            if (!libgles) libgles = dlopen("libGLESv2.so", RTLD_LAZY | RTLD_GLOBAL);
+        }
+        if (libgles) return dlsym(libgles, name);
+#endif
+        return nullptr;
+    }
+
+#define EKA2L1_PATCH_GLAD_FROM_DLSYM(name) \
+    if (!glad_##name) glad_##name = (decltype(glad_##name))try_dlsym_glesv2(#name)
+
+    static void patch_glad_core_pointers_from_dlsym() {
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glGetIntegerv);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glGetString);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glGetError);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glViewport);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glClearColor);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glClear);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glClearStencil);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glClearDepthf);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glEnable);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glDisable);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glIsEnabled);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glBlendFunc);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glBlendFuncSeparate);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glBlendEquation);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glBlendEquationSeparate);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glDepthFunc);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glDepthMask);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glDepthRangef);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glStencilOp);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glStencilFunc);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glStencilMask);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glColorMask);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glCullFace);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glFrontFace);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glScissor);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glLineWidth);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glPolygonOffset);
+
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glGenBuffers);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glDeleteBuffers);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glBindBuffer);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glBufferData);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glBufferSubData);
+
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glGenTextures);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glDeleteTextures);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glBindTexture);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glActiveTexture);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glTexImage2D);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glTexSubImage2D);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glTexParameteri);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glTexParameterf);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glTexParameteriv);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glTexParameterfv);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glPixelStorei);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glReadPixels);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glGenerateMipmap);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glCompressedTexImage2D);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glCopyTexImage2D);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glCopyTexSubImage2D);
+
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glGenFramebuffers);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glDeleteFramebuffers);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glBindFramebuffer);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glFramebufferTexture2D);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glFramebufferRenderbuffer);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glCheckFramebufferStatus);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glGenRenderbuffers);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glDeleteRenderbuffers);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glBindRenderbuffer);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glRenderbufferStorage);
+
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glCreateShader);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glDeleteShader);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glShaderSource);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glCompileShader);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glGetShaderiv);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glGetShaderInfoLog);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glCreateProgram);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glDeleteProgram);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glAttachShader);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glDetachShader);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glLinkProgram);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glGetProgramiv);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glGetProgramInfoLog);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glUseProgram);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glGetUniformLocation);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glUniform1i);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glUniform1f);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glUniform2f);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glUniform3f);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glUniform4f);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glUniform2fv);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glUniform3fv);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glUniform4fv);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glUniformMatrix3fv);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glUniformMatrix4fv);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glGetAttribLocation);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glBindAttribLocation);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glVertexAttribPointer);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glEnableVertexAttribArray);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glDisableVertexAttribArray);
+
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glDrawArrays);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glDrawElements);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glFinish);
+        EKA2L1_PATCH_GLAD_FROM_DLSYM(glFlush);
+    }
 
     static void install_gles2_compat_stubs() {
         // OES_vertex_array_object: try to fish the EXT-suffixed entry points
@@ -115,6 +240,11 @@ namespace eka2l1::drivers {
                     LOG_WARN(DRIVER_GRAPHICS, "gladLoadGLES2Loader() returned 0 — some ES 3.0+ entry points unavailable on this driver, installing GLES 2.0 compat shims");
                 }
 
+                // First, fall back to dlsym for any core ES 2.0 entry points
+                // glad couldn't resolve via eglGetProcAddress (libmali quirk).
+                patch_glad_core_pointers_from_dlsym();
+                // Then install no-op / extension-routed stubs for the missing
+                // ES 3.0+ surface area.
                 install_gles2_compat_stubs();
                 break;
             }
